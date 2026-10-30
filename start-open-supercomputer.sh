@@ -11,15 +11,6 @@ for command in node npm uv; do
   command -v "$command" >/dev/null 2>&1 || { echo "Required command not found: $command" >&2; exit 1; }
 done
 
-PYTHON_BIN=""
-for candidate in python3.12 python3 python; do
-  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-    PYTHON_BIN="$(command -v "$candidate")"
-    break
-  fi
-done
-[ -n "$PYTHON_BIN" ] || { echo "Python 3.12+ is required for the ComfyUI MCP service." >&2; exit 1; }
-
 if [ ! -f "$SERVICE_ENV" ]; then
   cp "$SERVICE_DIR/.env.example" "$SERVICE_ENV"
   echo "Created comfy_service/.env from its example. Add a service token there only if you also configure the same token for Next.js."
@@ -34,16 +25,19 @@ export COMFY_WORKFLOWS_DIR="$WORKFLOWS_DIR"
 export VFX_GURU_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
 export UV_PROJECT_ENVIRONMENT="$VENV_DIR"
 export NEXT_DIST_DIR=".next-open-supercomputer"
-if [ -z "${COMFY_SERVICE_TOKEN:-}" ]; then
-  export COMFY_SERVICE_TOKEN="$("$PYTHON_BIN" "$ROOT/scripts/read-env-value.py" "$SERVICE_ENV" COMFY_SERVICE_TOKEN)"
-fi
 
-echo "Syncing ComfyUI MCP dependencies using $PYTHON_BIN..."
+echo "Installing the managed Python 3.12 runtime..."
+uv python install 3.12
+
+echo "Syncing ComfyUI MCP dependencies..."
 if [ ! -x "$VENV_DIR/bin/python" ] || ! "$VENV_DIR/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then
   echo "Creating or repairing the ComfyUI Python environment..."
-  uv venv --clear --python "$PYTHON_BIN" "$VENV_DIR"
+  uv venv --clear --python 3.12 "$VENV_DIR"
 fi
-uv sync --project "$SERVICE_DIR" --frozen --python "$PYTHON_BIN"
+uv sync --project "$SERVICE_DIR" --frozen --python 3.12
+if [ -z "${COMFY_SERVICE_TOKEN:-}" ]; then
+  export COMFY_SERVICE_TOKEN="$("$VENV_DIR/bin/python" "$ROOT/scripts/read-env-value.py" "$SERVICE_ENV" COMFY_SERVICE_TOKEN)"
+fi
 
 cleanup() {
   if [ -n "${MCP_PID:-}" ] && kill -0 "$MCP_PID" 2>/dev/null; then
@@ -65,7 +59,7 @@ for ((attempt = 0; attempt < 60; attempt++)); do
     echo "ComfyUI MCP exited before becoming ready." >&2
     exit 1
   fi
-  if "$PYTHON_BIN" -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()' "$COMFY_SERVICE_URL/health" >/dev/null 2>&1; then
+  if "$VENV_DIR/bin/python" -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1).read()' "$COMFY_SERVICE_URL/health" >/dev/null 2>&1; then
     ready=1
     break
   fi

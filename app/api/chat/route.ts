@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import sharp, { type OverlayOptions } from "sharp";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { jsonSchema, stepCountIs, streamText, tool, type ModelMessage, type ToolSet } from "ai";
+import { jsonSchema, stepCountIs, streamText, tool, type ModelMessage, type Tool, type ToolSet } from "ai";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { getAssetCharacterProfiles, getAssetTags, getChatAsset, getImportedComfyOutput, getScene, listAssets, pinComfyRun, readAsset, recordImportedComfyOutput, saveAsset, saveAssetTags, saveLLMRequestLog } from "@/lib/asset-store";
 import { getChatProgress, publishChatCheckpoint, setChatActivity, setChatProgress } from "@/lib/chat-progress";
@@ -366,11 +366,11 @@ export async function POST(request: Request) {
       const mediaAssets: Array<Record<string, unknown>> = [];
       let workflowSubmissionCount = 0;
       const workflowRequestSignatures = new Set<string>();
-      const toolExecutors = new Map<string, (input: any) => Promise<unknown>>();
+      const toolExecutors = new Map<string, (input: unknown) => Promise<unknown>>();
       const tools: ToolSet = {};
-      const addTool = (name: string, description: string, inputSchema: Record<string, unknown>, execute: (input: any) => Promise<unknown>, toModelOutput?: (args: { output: any }) => { type: "content"; value: Array<any> } | { type: "json"; value: any }) => {
-        toolExecutors.set(name, execute);
-        (tools as Record<string, any>)[name] = tool({ description, inputSchema: jsonSchema(inputSchema as any), execute, ...(toModelOutput ? { toModelOutput } : {}) });
+      const addTool = (name: string, description: string, inputSchema: Record<string, unknown>, execute: (input: Record<string, unknown>) => Promise<unknown>, toModelOutput?: NonNullable<Tool<unknown, unknown>["toModelOutput"]>) => {
+        toolExecutors.set(name, (input) => execute(input as Record<string, unknown>));
+        (tools as Record<string, ToolSet[string]>)[name] = tool({ description, inputSchema: jsonSchema(inputSchema as Parameters<typeof jsonSchema>[0]), execute: async (input) => execute(input as Record<string, unknown>), ...(toModelOutput ? { toModelOutput } : {}) });
       };
       for (const mcpTool of listedTools) {
         const description = mcpTool.name === "run_workflow"
@@ -403,12 +403,12 @@ export async function POST(request: Request) {
               }
             }
             if (mcpTool.name === "run_workflow") {
-              const normalize = (value: any): any => {
+              const normalize = (value: unknown): unknown => {
                 if (Array.isArray(value)) return value.map(normalize);
-                if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((key) => [key, normalize(value[key])]));
+                if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map((key) => [key, normalize((value as Record<string, unknown>)[key])]));
                 return value;
               };
-              const signature = JSON.stringify(normalize({ workflow_id: args.workflow_id, parameters: args.parameters || {}, asset_inputs: args.asset_inputs || {} }));
+              const signature = JSON.stringify(normalize({ workflow_id: args.workflow_id, parameters: args.parameters || {}, asset_inputs: args.asset_inputs || {} })) || "";
               if (workflowRequestSignatures.has(signature)) return { error: "This exact workflow request was already submitted. Change the relevant input or settings before trying again." };
               if (workflowSubmissionCount >= 6) return { error: "The initial submission plus five retries have been used. Do not submit another workflow for this request." };
               workflowRequestSignatures.add(signature);
@@ -453,7 +453,7 @@ export async function POST(request: Request) {
       }, ({ output }) => {
         const result = output as { message?: string; imageUrl?: string };
         const match = result.imageUrl?.match(/^data:(image\/[^;]+);base64,([\s\S]+)$/);
-        return match ? { type: "content", value: [{ type: "text", text: result.message || "Visual asset inspection." }, { type: "image-data", data: match[2], mediaType: match[1] }] } : { type: "json", value: output };
+        return match ? { type: "content", value: [{ type: "text", text: result.message || "Visual asset inspection." }, { type: "image-data", data: match[2], mediaType: match[1] }] } : { type: "content", value: [{ type: "text", text: JSON.stringify(output) || "Asset inspection returned no result." }] };
       });
       addTool("extract_video_frame", "Extract and visually inspect one exact decoded frame from a video in this chat. frame_number is 1-based (frame 1 is the first frame). Returns the selected frame pixels and its estimated timestamp.", {
         type: "object", additionalProperties: false,
@@ -469,7 +469,7 @@ export async function POST(request: Request) {
       }, ({ output }) => {
         const result = output as { message?: string; imageUrl?: string };
         const match = result.imageUrl?.match(/^data:(image\/[^;]+);base64,([\s\S]+)$/);
-        return match ? { type: "content", value: [{ type: "text", text: result.message || "Extracted video frame." }, { type: "image-data", data: match[2], mediaType: match[1] }] } : { type: "json", value: output };
+        return match ? { type: "content", value: [{ type: "text", text: result.message || "Extracted video frame." }, { type: "image-data", data: match[2], mediaType: match[1] }] } : { type: "content", value: [{ type: "text", text: JSON.stringify(output) || "Frame extraction returned no result." }] };
       });
       addTool("extract_video_edge_frame", "Extract and visually inspect the exact first or last decoded frame of a video in this chat's media library. Use edge 'first' or 'last'; returns frame pixels and estimated timestamp.", {
         type: "object", additionalProperties: false,
@@ -485,7 +485,7 @@ export async function POST(request: Request) {
       }, ({ output }) => {
         const result = output as { message?: string; imageUrl?: string };
         const match = result.imageUrl?.match(/^data:(image\/[^;]+);base64,([\s\S]+)$/);
-        return match ? { type: "content", value: [{ type: "text", text: result.message || "Extracted video edge frame." }, { type: "image-data", data: match[2], mediaType: match[1] }] } : { type: "json", value: output };
+        return match ? { type: "content", value: [{ type: "text", text: result.message || "Extracted video edge frame." }, { type: "image-data", data: match[2], mediaType: match[1] }] } : { type: "content", value: [{ type: "text", text: JSON.stringify(output) || "Edge-frame extraction returned no result." }] };
       });
       addTool("tag_asset", "Save descriptive tags and reusable character profiles for an image or video in this chat's media library. Inspect the asset first when tags are based on visual content. Create character profiles only with names supplied by the user; keep unnamed visual subjects in ordinary tags.", {
         type: "object", additionalProperties: false,

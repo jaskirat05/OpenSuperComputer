@@ -9,17 +9,23 @@
     "start": "next start",
     "lint": "eslint ."
   },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "unrs-resolver@1.12.2": true
+  },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^2.0.88",
     "@assistant-ui/react": "^0.15.32",
     "@elah/editor": "^1.0.0",
     "@fastlabai/design-editor": "^1.0.0-beta.11",
+    "@imgly/background-removal": "1.7.0",
     "@modelcontextprotocol/client": "^2.4.0",
     "@videojs/react": "^10.2.0",
     "ai": "^6.0.319",
     "better-sqlite3": "^12.11.1",
     "lucide-react": "^0.468.0",
     "next": "^15.5.0",
+    "onnxruntime-web": "1.21.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
